@@ -1,5 +1,6 @@
 import "dotenv/config";
 import express from "express";
+import bcrypt from "bcrypt";
 
 import { pool } from "./config/database.js";
 
@@ -28,6 +29,98 @@ app.get("/health", async (request, response) => {
       message: "API is running, but the database connection failed"
     });
   }
+});
+
+app.post("/auth/register", async (request, response) => {
+
+  try {
+
+    const { email, password } = request.body;
+
+    if (!email || !password) {
+
+      return response.status(400).json({
+
+        error: "Email and password are required"
+
+      });
+
+    }
+
+    if (password.length < 8) {
+
+      return response.status(400).json({
+
+        error: "Password must be at least 8 characters"
+
+      });
+
+    }
+
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const existingUser = await pool.query(
+
+      "SELECT id FROM users WHERE email = $1",
+
+      [normalizedEmail]
+
+    );
+
+    if (existingUser.rows.length > 0) {
+
+      return response.status(409).json({
+
+        error: "An account with this email already exists"
+
+      });
+
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    const result = await pool.query(
+
+      `
+
+      INSERT INTO users (email, password_hash)
+
+      VALUES ($1, $2)
+
+      RETURNING id, email, created_at
+
+      `,
+
+      [normalizedEmail, passwordHash]
+
+    );
+
+    return response.status(201).json({
+
+      user: result.rows[0]
+
+    });
+
+  } catch (error) {
+
+  console.error("Registration failed");
+
+  console.error("Message:", error.message);
+
+  console.error("Code:", error.code);
+
+  console.error("Detail:", error.detail);
+
+  console.error("Stack:", error.stack);
+
+    return response.status(500).json({
+
+      error: error.message
+
+    });
+
+  }
+
 });
 
 app.listen(port, () => {
