@@ -1,6 +1,7 @@
 import "dotenv/config";
 import express from "express";
 import bcrypt from "bcrypt";
+import jwt from "jsonwebtoken";
 
 import { pool } from "./config/database.js";
 
@@ -122,7 +123,77 @@ app.post("/auth/register", async (request, response) => {
   }
 
 });
+app.post("/auth/login", async (request, response) => {
+  try {
+    const { email, password } = request.body;
+   if (!email || !password) {
+      return response.status(400).json({
+        error: "Email and password are required"
+      });
+    }
 
+    const normalizedEmail = email.trim().toLowerCase();
+
+    const result = await pool.query(
+      `
+      SELECT id, email, password_hash
+      FROM users
+      WHERE email = $1
+      `,
+      [normalizedEmail]
+    );
+
+    const user = result.rows[0];
+
+    if (!user) {
+      return response.status(401).json({
+        error: "Invalid email or password"
+      });
+    }
+
+    const passwordMatches = await bcrypt.compare(
+      password,
+      user.password_hash
+    );
+
+    if (!passwordMatches) {
+      return response.status(401).json({
+        error: "Invalid email or password"
+      });
+    }
+
+    if (!process.env.JWT_SECRET) {
+      throw new Error("JWT_SECRET is missing");
+    }
+
+    const accessToken = jwt.sign(
+      {
+        sub: user.id,
+        email: user.email
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "15m",
+        issuer: "authentication-poc",
+        audience: "authentication-poc-api"
+      }
+    );
+
+    return response.status(200).json({
+      user: {
+        id: user.id,
+        email: user.email
+      },
+      accessToken
+    });
+  } catch (error) {
+    console.error("Login failed:", error);
+
+    return response.status(500).json({
+      error: error.message
+    });
+  }
+});
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
