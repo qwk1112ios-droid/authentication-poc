@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import { authenticate } from "./middleware/authenticate.js";
 
 import { pool } from "./config/database.js";
 
@@ -191,6 +192,37 @@ app.post("/auth/login", async (request, response) => {
 
     return response.status(500).json({
       error: error.message
+    });
+  }
+});
+
+app.get("/auth/me", authenticate, async (request, response) => {
+  try {
+    const result = await pool.query(
+      `
+      SELECT id, email, created_at
+      FROM users
+      WHERE id = $1
+      `,
+      [request.user.sub]
+    );
+
+    const user = result.rows[0];
+
+    if (!user) {
+      return response.status(404).json({
+        error: "User not found"
+      });
+    }
+
+    return response.status(200).json({
+      user
+    });
+  } catch (error) {
+    console.error("Unable to load current user:", error);
+
+    return response.status(500).json({
+      error: "Unable to load user"
     });
   }
 });
