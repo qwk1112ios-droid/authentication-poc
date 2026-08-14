@@ -2,6 +2,7 @@ import "dotenv/config";
 import express from "express";
 import bcrypt from "bcrypt";
 import jwt from "jsonwebtoken";
+import crypto from "crypto"; 
 import { authenticate } from "./middleware/authenticate.js";
 
 import { pool } from "./config/database.js";
@@ -125,6 +126,7 @@ app.post("/auth/register", async (request, response) => {
 
 });
 app.post("/auth/login", async (request, response) => {
+  console.log("LOGIN ROUTE HIT");
   try {
     const { email, password } = request.body;
    if (!email || !password) {
@@ -179,13 +181,41 @@ app.post("/auth/login", async (request, response) => {
         audience: "authentication-poc-api"
       }
     );
+    const refreshToken = crypto.randomBytes(48).toString("hex");
+    const refreshTokenHash = crypto
+    .createHash("sha256")
+    .update(refreshToken)
+    .digest("hex");
+
+   const refreshTokenExpiresAt = new Date(
+   Date.now() + 30 * 24 * 60 * 60 * 1000
+   );
+
+   await pool.query(
+  `
+  INSERT INTO refresh_sessions (
+    user_id,
+    token_hash,
+    expires_at
+  )
+  VALUES ($1, $2, $3)
+  `,
+  [
+    user.id,
+    refreshTokenHash,
+    refreshTokenExpiresAt
+  ]
+);
+console.log("REFRESH SESSION INSERTED");
+
 
     return response.status(200).json({
       user: {
         id: user.id,
         email: user.email
       },
-      accessToken
+      accessToken,
+      refreshToken
     });
   } catch (error) {
     console.error("Login failed:", error);
@@ -226,6 +256,116 @@ app.get("/auth/me", authenticate, async (request, response) => {
     });
   }
 });
+
+app.post("/auth/refresh", async (request, response) => {
+  try {
+    const { refreshToken } = request.body;
+
+    if (!refreshToken) {
+      return response.status(400).json({
+        error: "Refresh token is required"
+      });
+    }
+
+    const refreshTokenHash = crypto
+      .createHash("sha256")
+      .update(refreshToken)
+      .digest("hex");
+
+    const result = await pool.query(
+      `
+      SELECT
+        refresh_sessions.id AS session_id,
+        refresh_sessions.user_id,
+        refresh_sessions.expires_at,
+        refresh_sessions.revoked_at,
+        users.email
+      FROM refresh_sessions
+      JOIN users
+        ON users.id = refresh_sessions.user_id
+      WHERE refresh_sessions.token_hash = $1
+      `,
+      [refreshTokenHash]
+    );
+
+    const session = result.rows[0];
+
+    if (!session) {
+      return response.status(401).json({
+        error: "Invalid refresh token"
+      });
+    }
+
+    if (session.revoked_at) {
+      return response.status(401).json({
+        error: "Refresh session has been revoked"
+      });
+    }
+
+    if (new Date(session.expires_at) <= new Date()) {
+      return response.status(401).json({
+        error: "Refresh token has expired"
+      });
+    }
+
+    if (!process.env.JWT_SECRET) {
+      throw new Error("JWT_SECRET is missing");
+    }
+
+    const newAccessToken = jwt.sign(
+      {
+        sub: session.user_id,
+        email: session.email
+      },
+      process.env.JWT_SECRET,
+      {
+        expiresIn: "15m",
+        issuer: "authentication-poc",
+        audience: "authentication-poc-api"
+      }
+    );
+
+    const newRefreshToken = crypto
+      .randomBytes(48)
+      .toString("hex");
+
+    const newRefreshTokenHash = crypto
+      .createHash("sha256")
+      .update(newRefreshToken)
+      .digest("hex");
+
+    const newExpiresAt = new Date(
+      Date.now() + 30 * 24 * 60 * 60 * 1000
+    );
+
+    await pool.query(
+      `
+      UPDATE refresh_sessions
+      SET
+        token_hash = $1,
+        expires_at = $2
+      WHERE id = $3
+      `,
+      [
+        newRefreshTokenHash,
+        newExpiresAt,
+        session.session_id
+      ]
+    );
+
+    return response.status(200).json({
+      accessToken: newAccessToken,
+      refreshToken: newRefreshToken
+    });
+  } catch (error) {
+    console.error("Refresh failed:", error);
+
+    return response.status(500).json({
+      error: "Unable to refresh session"
+    });
+  }
+});
+
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
