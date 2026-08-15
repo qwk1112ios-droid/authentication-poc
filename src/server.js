@@ -366,6 +366,51 @@ app.post("/auth/refresh", async (request, response) => {
   }
 });
 
+app.post("/auth/logout", async (request, response) => {
+  try {
+    const { refreshToken } = request.body;
+
+    if (!refreshToken) {
+      return response.status(400).json({
+        error: "Refresh token is required"
+      });
+    }
+
+    const refreshTokenHash = crypto
+      .createHash("sha256")
+      .update(refreshToken)
+      .digest("hex");
+
+    const result = await pool.query(
+      `
+      UPDATE refresh_sessions
+      SET revoked_at = NOW()
+      WHERE token_hash = $1
+        AND revoked_at IS NULL
+      RETURNING id
+      `,
+      [refreshTokenHash]
+    );
+
+    if (result.rows.length === 0) {
+      return response.status(401).json({
+        error: "Invalid or already revoked refresh token"
+      });
+    }
+
+    return response.status(200).json({
+      message: "Logged out successfully"
+    });
+  } catch (error) {
+    console.error("Logout failed:", error);
+
+    return response.status(500).json({
+      error: "Unable to log out"
+    });
+  }
+});
+
+
 app.listen(port, () => {
   console.log(`Server running at http://localhost:${port}`);
 });
